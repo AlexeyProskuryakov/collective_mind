@@ -1,0 +1,6 @@
+.idea
+*.py[cod]
+dump
+*.dump
+*.txt
+*.zip
