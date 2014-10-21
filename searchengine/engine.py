@@ -1,3 +1,5 @@
+# coding=utf-8
+from itertools import chain
 from urlparse import urljoin, urlparse
 from redis.client import StrictRedis
 import requests
@@ -48,8 +50,9 @@ class DataBaseHandler(object):
         self.redis.hset(word_location(url_id), word_id, location)
         self.redis.hset(url_location(word_id), url_id, location)
 
-    def get_words_location(self, url):
-        self.redis.hgetall(word_location(url))
+    def get_words_locations_in_(self, url):
+        url_id = id(url)
+        self.redis.hgetall(word_location(url_id))
 
     def set_link(self, from_url, to_url, via_word):
         from_id = self.add_url(from_url)
@@ -61,6 +64,10 @@ class DataBaseHandler(object):
 
     def is_url_saved(self, url):
         return self.redis.get(id(url))
+
+    def get_urls_locations_of_(self, word):
+        word_id = id(word)
+        return self.redis.hgetall(url_location(word_id))
 
 
 class Crawler(object):
@@ -99,7 +106,7 @@ class Crawler(object):
         return tokenizers.simple_word_tokenize(text)
 
     def is_indexed(self, url):
-        return self.db.is_url_saved(url) and self.db.get_words_location(url)
+        return self.db.is_url_saved(url) and self.db.get_words_locations_in_(url)
 
     def add_link_ref(self, url_from, url_to, link_text):
         self.db.set_link(url_from, url_to, link_text)
@@ -126,6 +133,30 @@ class Crawler(object):
                         link_text = self.get_text_only(link)
                         self.add_link_ref(page, url, link_text)
             pages = new_pages
+
+
+class Searcher(object):
+    def __init__(self):
+        self.db = DataBaseHandler()
+    @staticmethod
+    def __union_dict_values(one, two):
+        """
+        Объединение двух словарей по значениям
+        :param one:
+        :param two:
+        :return:
+        """
+        result = {}
+        for el in chain(one.iterkeys(), two.iterkeys()):
+            result[el] = ()
+
+    def match_rows(self, q):
+        words = q.split()
+        result = {}
+        for word in words:
+            locations = self.db.get_urls_locations_of_(word)
+
+        return result
 
 
 if __name__ == '__main__':
