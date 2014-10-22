@@ -1,10 +1,11 @@
 # coding=utf-8
 from collections import defaultdict, Iterable
 from urlparse import urljoin, urlparse
-from redis.client import StrictRedis
+import html2text
 import requests
 from bs4 import BeautifulSoup
 from pymorphy2 import tokenizers
+from searchengine.database import DataBaseHandler
 
 __author__ = '4ikist'
 
@@ -20,73 +21,22 @@ def is_resident_link(page_url, link):
         return False
 
 
-id = lambda x: hash(x)
-word_location = lambda x: 'words_in_url:%s' % x
-url_location = lambda x: 'urls_with_word:%s' % x
-link = lambda x, y: '%s->%s' % (x, y)
+def to_unicode(data):
+    if isinstance(data, unicode):
+        return data
+    elif isinstance(data, str):
+        return data.decode('utf8')
 
-from_ = lambda x: '%s>' % x
-_to = lambda x: '>%s' % x
 
 ignore_words = []
-
-
-class DataBaseHandler(object):
-    def __init__(self, truncate=False):
-        self.redis = StrictRedis(db=15)
-        if truncate:
-            self.redis.flushdb()
-
-    def get_url(self, url_id):
-        return self.redis.hget('url_ids', url_id)
-
-    def get_word(self, word_id):
-        return self.redis.hget('word_ids', word_id)
-
-    def add_url(self, url):
-        url_id = id(url)
-        saved = self.redis.hget('url_ids', url_id)
-        if not saved:
-            self.redis.hset('url_ids', url_id, url)
-        return url_id
-
-    def add_word(self, word):
-        word_id = id(word)
-        saved = self.redis.hget('word_ids', word_id)
-        if not saved:
-            self.redis.hset('word_ids', word_id, word)
-        return word_id
-
-    def set_word_location(self, url_id, word_id, location):
-        self.redis.hset(word_location(url_id), word_id, location)
-        self.redis.hset(url_location(word_id), url_id, location)
-
-    def get_words_locations_in_(self, url):
-        url_id = id(url)
-        self.redis.hgetall(word_location(url_id))
-
-    def set_link(self, from_url, to_url, via_word):
-        from_id = self.add_url(from_url)
-        to_id = self.add_url(to_url)
-        word_id = self.add_word(via_word)
-        self.redis.set(link(from_id, to_id), word_id)
-        self.redis.lpush(from_(from_id), to_id)
-        self.redis.lpush(_to(to_id), from_id)
-
-    def is_url_saved(self, url):
-        return self.redis.get(id(url))
-
-    def get_urls_locations_of_(self, word):
-        """
-        :returns {url_id:location,...}
-        """
-        word_id = id(word)
-        return self.redis.hgetall(url_location(word_id))
 
 
 class Crawler(object):
     def __init__(self, db):
         self.db = db
+        self.html2text = html2text.HTML2Text()
+        self.html2text.ignore_links = True
+
 
     def get_entry_id(self, table, field, value, create_new=True):
         return None
@@ -95,6 +45,7 @@ class Crawler(object):
         if self.is_indexed(url): return
         print "Indexing %s" % url
         text = self.get_text_only(soup)
+        if text is None: return
         words = self.separate_words(text)
         url_id = self.db.add_url(url)
         for i, word in enumerate(words):
@@ -102,23 +53,16 @@ class Crawler(object):
                 words_id = self.db.add_word(word)
                 self.db.set_word_location(url_id, words_id, i)
 
-    def get_text_only(self, soup):
-        #todo use some more good renderer like html 2 text
-        v = soup.string
-        if v is None:
-            elements = []
-            for el in soup.contents:
-                try:
-                    soup_element = self.get_text_only(el).encode('utf-8', errors='ignore')
-                    elements.append(soup_element)
-                except Exception as e:
-                    continue
-            result_text = '\n'.join(elements)
-            return result_text
-        return v.strip()
+    def get_text_only(self, html):
+        # todo use some more good renderer like html 2 text
+        try:
+
+            text = self.html2text.handle(to_unicode(html))
+            return text
+        except Exception as e:
+            return None
 
     def separate_words(self, text):
-        print text
         return tokenizers.simple_word_tokenize(text)
 
     def is_indexed(self, url):
@@ -136,7 +80,7 @@ class Crawler(object):
                     print "some error while loading %s" % page
                     continue
                 soup = BeautifulSoup(loaded_page.content)
-                self.add_to_index(page, soup)
+                self.add_to_index(page, loaded_page.content)
                 links = soup.find_all('a')
                 for link in links:
                     if 'href' in dict(link.attrs):
@@ -146,8 +90,9 @@ class Crawler(object):
                         if url[:4] == 'http' and not self.is_indexed(url):
                             if (only_resident and is_resident_link(page, url)) or not only_resident:
                                 new_pages.add(url)
-                        link_text = self.get_text_only(link)
-                        self.add_link_ref(page, url, link_text)
+                        link_text = self.get_text_only(link.string)
+                        if link_text is not None:
+                            self.add_link_ref(page, url, link_text)
             pages = new_pages
 
 
@@ -192,7 +137,8 @@ class Searcher(object):
 
 
 if __name__ == '__main__':
-    crawler = Crawler(DataBaseHandler(truncate=True))
-    crawler.crawl(['http://lurkmore.to/'], depth=2, only_resident=True)
-    # searcher = Searcher(DataBaseHandler())
-    # print searcher.match_rows('привет пока')
+    # crawler = Crawler(DataBaseHandler(truncate=True))
+    # crawler.crawl(['http://lurkmore.to/'], depth=2, only_resident=True)
+    searcher = Searcher(DataBaseHandler())
+    print searcher.match_rows(u'привет пока')
+    
