@@ -5,6 +5,7 @@ import html2text
 import requests
 from bs4 import BeautifulSoup
 from pymorphy2 import tokenizers
+
 from searchengine.database import DataBaseHandler
 
 __author__ = '4ikist'
@@ -37,10 +38,6 @@ class Crawler(object):
         self.html2text = html2text.HTML2Text()
         self.html2text.ignore_links = True
 
-
-    def get_entry_id(self, table, field, value, create_new=True):
-        return None
-
     def add_to_index(self, url, soup):
         if self.is_indexed(url): return
         print "Indexing %s" % url
@@ -54,9 +51,7 @@ class Crawler(object):
                 self.db.set_word_location(url_id, words_id, i)
 
     def get_text_only(self, html):
-        # todo use some more good renderer like html 2 text
         try:
-
             text = self.html2text.handle(to_unicode(html))
             return text
         except Exception as e:
@@ -126,19 +121,57 @@ class Searcher(object):
 
     def match_rows(self, q):
         words = q.split()
-        result_ids = {}
+        url_and_words = {}
+        word_ids = []
         for word in words:
-            locations = self.db.get_urls_locations_of_(word)
-            result_ids = _union_dict_values(result_ids, locations)
-        result = {}
-        for k, v in result_ids.iteritems():
-            result[self.db.get_url(k)] = v
-        return result
+            word_id, locations = self.db.get_urls_locations_of_(word)
+            url_and_words = _union_dict_values(url_and_words, locations)
+            word_ids.append(word_id)
+        return url_and_words, word_ids
+
+    def get_scored_list(self, urls_words, word_ids):
+        '''
+
+        :param urls_words:
+        :param word_ids:
+        :return: {url_id:weight, ...}
+        '''
+        total_scores = dict([(url_id, 0) for url_id, _ in urls_words.iteritems()])
+        weights = [(1.0, Scores.frequency_scores(urls_words))]
+        for (weight, scores) in weights:
+            for url in total_scores:
+                total_scores[url] += weight * scores[url]
+        return total_scores
+
+    def query(self, q):
+        urls_words, words_ids = self.match_rows(q)
+        scores = self.get_scored_list(urls_words, words_ids)
+        ranked_scores = sorted([(score, self.db.get_url(url_id)) for url_id, score in scores.iteritems()], reverse=1)
+        return ranked_scores
+
+
+class Scores(object):
+    @staticmethod
+    def normalize_scores(scores, small_is_better=False):
+        small = 0.000001
+        if small_is_better:
+            min_score = min(scores.values())
+            return dict([(url_id, float(min_score) / max(small, l)) for url_id, l in scores.iteritems()])
+        else:
+            max_score = max(scores.values())
+            if max_score == 0: max_score = small
+            return dict([(url_id, float(score) / max_score) for url_id, score in scores.iteritems()])
+
+    @staticmethod
+    def frequency_scores(rows):
+        total_scores = dict([(url_id, len(words_ids)) for url_id, words_ids in rows.iteritems()])
+        return Scores.normalize_scores(total_scores)
 
 
 if __name__ == '__main__':
-    # crawler = Crawler(DataBaseHandler(truncate=True))
-    # crawler.crawl(['http://lurkmore.to/'], depth=2, only_resident=True)
+
     searcher = Searcher(DataBaseHandler())
-    print searcher.match_rows(u'привет пока')
-    
+    result = searcher.query(u'привет пока')
+    for (score, url_name) in result:
+        print score, '\t', url_name
+
